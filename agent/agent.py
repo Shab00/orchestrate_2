@@ -49,7 +49,6 @@ class OpenAIToolAgent:
             messages=messages,
             tools=self.tools.openai_tools(),
             tool_choice="auto",
-            response_format={"type": "json_object"},
         )
 
     def _append_tool_results(self, messages: list[dict[str, Any]], tool_calls: list[Any]) -> None:
