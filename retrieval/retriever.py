@@ -26,7 +26,7 @@ class HybridRetriever:
     @classmethod
     def from_markdown_folder(cls, folder: Path, model_name: str = "all-MiniLM-L6-v2") -> "HybridRetriever":
         chunks = _load_markdown_chunks(folder)
-        tokens = [chunk.split() for _, chunk in chunks]
+        tokens = [text.split() for _, text in chunks]
         bm25 = BM25Okapi(tokens)
         embedder = SentenceTransformer(model_name)
         matrix = _encode_texts(embedder, [text for _, text in chunks])
@@ -49,7 +49,10 @@ def _load_markdown_chunks(folder: Path) -> list[tuple[str, str]]:
         if text:
             chunks.append((str(path), text))
     if not chunks:
-        raise ValueError(f"No markdown files found in {folder}")
+        raise ValueError(
+            f"No markdown files found in {folder}. "
+            "Please add .md files or choose a different directory."
+        )
     return chunks
 
 

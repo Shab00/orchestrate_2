@@ -41,7 +41,10 @@ class OpenAIToolAgent:
                 return coerce_structured_output(message.content or "{}")
             messages.append(message.model_dump(exclude_none=True))
             self._append_tool_results(messages, tool_calls)
-        raise RuntimeError("Exceeded max tool-calling rounds without final answer.")
+        raise RuntimeError(
+            f"Exceeded max tool-calling rounds ({self.max_rounds}) without final answer. "
+            "Consider simplifying the query or increasing max_rounds."
+        )
 
     def _chat(self, messages: list[dict[str, Any]]) -> Any:
         return self.client.chat.completions.create(

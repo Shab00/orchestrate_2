@@ -72,7 +72,7 @@ def _search_markdown(arguments: dict[str, Any], retriever: "HybridRetriever") ->
     query = str(arguments.get("query", "")).strip()
     top_k = int(arguments.get("top_k", 5))
     if not query:
-        return {"ok": False, "content": "query is required", "metadata": {"tool": "search_markdown"}}
+        return {"ok": False, "content": "Query is required", "metadata": {"tool": "search_markdown"}}
     hits = retriever.query(query_text=query, top_k=top_k)
     lines = [f"{idx + 1}. {hit['source']} (score={hit['score']:.3f})" for idx, hit in enumerate(hits)]
     content = "\n".join(lines) if lines else "No retrieval hits found."
