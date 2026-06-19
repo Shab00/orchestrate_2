@@ -18,6 +18,16 @@ MODEL = "gpt-4o"
 _RATE_LIMIT_RETRIES = 5
 _RATE_LIMIT_BACKOFF = [5, 10, 20, 40, 60]  # seconds between retries
 
+# GPT-4o supported image formats
+_SUPPORTED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
+_MIME_MAP = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
 
 def _get_client() -> OpenAI:
     return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -34,7 +44,10 @@ def _load_images(image_paths_str: str) -> tuple[list[dict[str, str]], bool]:
         if not full_path.exists():
             continue
         suffix = Path(ref).suffix.lower().lstrip(".")
-        mime = "image/jpeg" if suffix in ("jpg", "jpeg") else f"image/{suffix}"
+        if suffix not in _SUPPORTED_EXTENSIONS:
+            print(f"  Skipping unsupported image format: {ref} (.{suffix})")
+            continue
+        mime = _MIME_MAP.get(suffix, "image/jpeg")
         b64 = encode_image_base64(full_path)
         images.append({"mime": mime, "data": b64})
     return images, len(images) == 0
