@@ -1,18 +1,23 @@
-"""Damage claim verification agent using OpenAI GPT-4o vision."""
+"""Damage claim verification agent using OpenAI GPT-4o-mini vision."""
 from __future__ import annotations
 
 import base64
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 from agent.safety import run_safety_gates
 from agent.schemas import ClaimVerdict, safe_fallback_verdict
 from data.loader import encode_image_base64, filter_evidence_for_object, resolve_image_path
 from prompts.system import CLAIM_SYSTEM_PROMPT
+
+MODEL = "gpt-4o-mini"
+_RATE_LIMIT_RETRIES = 5
+_RATE_LIMIT_BACKOFF = [5, 10, 20, 40, 60]  # seconds between retries
 
 
 def _get_client() -> OpenAI:
@@ -77,23 +82,31 @@ def _build_user_content(
             "type": "image_url",
             "image_url": {
                 "url": f"data:{img['mime']};base64,{img['data']}",
-                "detail": "high",
+                "detail": "low",
             },
         })
     return content
 
 
 def _call_vision(client: OpenAI, user_content: list[Any]) -> str:
-    """Make a single GPT-4o vision call and return the raw text response."""
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": CLAIM_SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        max_tokens=1000,
-    )
-    return response.choices[0].message.content or ""
+    """Make a single GPT-4o-mini vision call with automatic rate-limit retry."""
+    for attempt, wait in enumerate(_RATE_LIMIT_BACKOFF, start=1):
+        try:
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": CLAIM_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                max_tokens=1000,
+            )
+            return response.choices[0].message.content or ""
+        except RateLimitError:
+            if attempt >= _RATE_LIMIT_RETRIES:
+                raise
+            print(f"  Rate limit hit — waiting {wait}s before retry {attempt}/{_RATE_LIMIT_RETRIES}...")
+            time.sleep(wait)
+    return ""
 
 
 def _retry_call(client: OpenAI, user_content: list[Any], raw: str) -> str:
