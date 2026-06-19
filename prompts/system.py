@@ -37,8 +37,8 @@ issue_type: one of the values below. Read all definitions carefully before choos
   - missing_part: a component that is entirely absent from the object.
   - torn_packaging: packaging material that has been torn or ripped open. Use "none" if the seal appears intact in the images despite the user's claim.
   - crushed_packaging: packaging that has been compressed or crushed.
-  - water_damage: visible water staining, soaking, or wet marks on a surface. Always use "water_damage" NOT "stain" when the damage is caused by liquid or water.
-  - stain: a non-water discolouration or mark (e.g. oil, ink, food). Do NOT use stain for water damage.
+  - water_damage: visible water staining, soaking, or wet marks caused by water/liquid on a surface. Use water_damage ONLY when the liquid source is water and the surface shows soaking or wet staining. If the user says "stain" or "mark" and the image shows a dried discolouration (not wet/soaking), use stain instead.
+  - stain: a discolouration or mark on a surface — including dried water stains, oil, ink, food. Use "stain" when the user describes a stain/mark left behind, even if caused by water, UNLESS the surface is visibly wet or soaking.
   - none: the claimed part IS visible in the image but shows NO damage. Use "none" when you can clearly see the part but it looks undamaged.
   - unknown: the part is not visible, the image is insufficient, or the damage type genuinely cannot be determined. Use "unknown" when claim_status=not_enough_information and you cannot determine the damage type from the images.
 
@@ -48,36 +48,47 @@ issue_type: one of the values below. Read all definitions carefully before choos
   - A laptop screen fragmented into multiple pieces = glass_shatter
   - A user saying "scrape" or "scratch" on a bumper = scratch (NOT dent) when image is ambiguous
   - Missing contents from a package where images are insufficient = unknown (NOT missing_part)
-  - A package seal that looks intact in images despite user claim = none (NOT torn_packaging)
+  - A package seal that looks intact in images despite user claim = none (NOT torn_packaging) and claim_status=contradicted
+  - A physical part (trackpad, bumper) that looks undamaged in the image despite user claim = none and claim_status=contradicted
   - When claim_status=not_enough_information, issue_type should almost always be unknown
+  - User says "left a stain" after spilling water = stain (NOT water_damage) — it's a dried mark, not active soaking
 
 object_part: the specific part of the object affected.
   For car: front_bumper, rear_bumper, door, hood, windshield, side_mirror, headlight, taillight, fender, quarter_panel, body, unknown.
   For laptop: screen, keyboard, hinge, trackpad, corner, body, port, unknown.
   For package: package_corner, seal, box, package_side, contents, unknown.
+  IMPORTANT: Use "package_side" for the flat side surface of a package (not "box"). Use "box" only when referring to the entire box structure generically.
 
 claim_status: one of: supported, contradicted, not_enough_information.
+  - supported: the images clearly show the claimed damage on the claimed part.
+  - contradicted: the images clearly show the claimed part but it does NOT show the claimed damage, OR the image shows a completely different object.
+  - not_enough_information: the claimed part is not visible, the image is too unclear, or evidence is genuinely insufficient.
+  IMPORTANT: If you can clearly see the claimed part and it shows NO damage, use contradicted (not not_enough_information).
 claim_status_justification: string — concise image-grounded explanation. Mention relevant image IDs (e.g. img_1, img_2) when helpful.
 supporting_image_ids: string — semicolon-separated image IDs (filename without extension) that support the decision. Use "none" if no image is sufficient.
 valid_image: boolean — true if the image set is usable for automated review; false otherwise.
+  IMPORTANT: valid_image=true even if the image shows the wrong object or no damage — as long as the image itself is clear and readable. Only set valid_image=false if the image is blurry, missing, unreadable, or completely unusable.
 
 severity: one of: none, low, medium, high, unknown. Use the scale below strictly.
   - none: no damage is visible (use when issue_type=none)
-  - low: minor cosmetic damage with no structural impact (small scratch, light scuff, minor corner dent on laptop, small package crush or tear)
+  - low: minor cosmetic damage with no structural impact (small scratch, light scuff, minor corner dent on laptop, small package crush or tear, dried stain)
   - medium: moderate damage that affects appearance or partially affects function (dent on car bumper or door, crack lines on windshield or laptop screen, broken hinge, broken mirror, water stain on package, torn seal, crushed package corner)
-  - high: severe damage requiring urgent repair or full replacement (completely shattered glass fragments, major structural collision damage)
+  - high: severe damage requiring urgent repair or full replacement (completely shattered glass fragments, major structural collision damage, broken_part that renders device/vehicle unusable)
   - unknown: severity cannot be assessed — use ONLY when claim_status=not_enough_information AND the damage type is also unknown.
 
   IMPORTANT severity calibration — follow exactly:
   - crack (windshield or laptop screen crack lines) = medium
   - glass_shatter (fragmented glass) = high
   - broken_part (mirror, hinge) = medium
+  - broken_part that makes device completely unusable = high
   - dent on car bumper or door = medium
   - scratch or scrape = low
+  - stain (dried mark) = low
   - water_damage on packaging = medium
   - crushed_packaging = medium
   - torn_packaging = medium
   - issue_type=none (part visible, no damage) = none
+  - contradicted claim (part visible but undamaged) = none
   - wrong object shown but some damage visible on wrong object = low
   - claim_status=not_enough_information with truly unidentifiable image = unknown
 
@@ -162,7 +173,7 @@ Correct output:
 {
   "evidence_standard_met": true,
   "evidence_standard_met_reason": "Image is clear but shows a different object than claimed.",
-  "risk_flags": "wrong_object;claim_mismatch;user_history_risk;manual_review_required",
+  "risk_flags": "wrong_object;claim_mismatch;manual_review_required",
   "issue_type": "unknown",
   "object_part": "unknown",
   "claim_status": "contradicted",
@@ -171,5 +182,41 @@ Correct output:
   "valid_image": true,
   "severity": "low"
 }
-WHY: Wrong object shown = contradicted. Some damage is visible on wrong object so severity=low (not unknown).
+WHY: Wrong object shown = contradicted. valid_image=true because image is clear. severity=low because some damage is visible on the wrong object.
+
+Example 6 — contradicted claim, part visible but undamaged:
+User says: "The package seal was torn when I received it."
+Image shows: package seal that appears intact and undamaged.
+Correct output:
+{
+  "evidence_standard_met": true,
+  "evidence_standard_met_reason": "Package seal is clearly visible in the image.",
+  "risk_flags": "claim_mismatch",
+  "issue_type": "none",
+  "object_part": "seal",
+  "claim_status": "contradicted",
+  "claim_status_justification": "The image shows the package seal appears intact with no visible tearing, contradicting the claim.",
+  "supporting_image_ids": "img_1",
+  "valid_image": true,
+  "severity": "none"
+}
+WHY: Seal visible but undamaged = issue_type none, claim_status contradicted, severity none.
+
+Example 7 — water spill leaving a stain, stain vs water_damage:
+User says: "I spilled water near my laptop and it left a stain on the keyboard."
+Image shows: keyboard with a dried discolouration/mark where water was spilled.
+Correct output:
+{
+  "evidence_standard_met": true,
+  "evidence_standard_met_reason": "Keyboard is clearly visible with a dried mark.",
+  "risk_flags": "none",
+  "issue_type": "stain",
+  "object_part": "keyboard",
+  "claim_status": "supported",
+  "claim_status_justification": "img_1 shows a dried discolouration on the keyboard consistent with a water stain.",
+  "supporting_image_ids": "img_1",
+  "valid_image": true,
+  "severity": "low"
+}
+WHY: User said "left a stain" — it is a dried mark, not active soaking. Use stain NOT water_damage. severity=low for a dried stain.
 """
