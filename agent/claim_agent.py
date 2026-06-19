@@ -1,6 +1,8 @@
 """Damage claim verification agent using OpenAI GPT-4o vision."""
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
 import time
@@ -18,23 +20,45 @@ MODEL = "gpt-4o"
 _RATE_LIMIT_RETRIES = 5
 _RATE_LIMIT_BACKOFF = [5, 10, 20, 40, 60]  # seconds between retries
 
-# GPT-4o supported image formats
-_SUPPORTED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
-_MIME_MAP = {
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "png": "image/png",
-    "gif": "image/gif",
-    "webp": "image/webp",
-}
+# GPT-4o supported MIME types
+_SUPPORTED_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
 
 def _get_client() -> OpenAI:
     return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
+def _detect_mime(path: Path) -> str:
+    """Detect actual image format by reading magic bytes, ignoring file extension."""
+    with open(path, "rb") as f:
+        header = f.read(16)
+    if header[:4] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if header[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if header[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+        return "image/webp"
+    # AVIF / HEIC / other ISO media — needs conversion
+    return "image/avif"
+
+
+def _convert_to_jpeg_b64(path: Path) -> str:
+    """Convert any image (including AVIF) to JPEG base64 using Pillow."""
+    try:
+        from PIL import Image
+        img = Image.open(path).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception as e:
+        raise RuntimeError(f"Failed to convert image {path}: {e}") from e
+
+
 def _load_images(image_paths_str: str) -> tuple[list[dict[str, str]], bool]:
-    """Load images from semicolon-separated paths. Returns (image_list, all_missing)."""
+    """Load images from semicolon-separated paths. Returns (image_list, all_missing).
+    Automatically converts AVIF/HEIC/unsupported formats to JPEG via Pillow."""
     refs = [p.strip() for p in image_paths_str.split(";") if p.strip()]
     if not refs:
         return [], True
@@ -43,12 +67,18 @@ def _load_images(image_paths_str: str) -> tuple[list[dict[str, str]], bool]:
         full_path = resolve_image_path(ref)
         if not full_path.exists():
             continue
-        suffix = Path(ref).suffix.lower().lstrip(".")
-        if suffix not in _SUPPORTED_EXTENSIONS:
-            print(f"  Skipping unsupported image format: {ref} (.{suffix})")
-            continue
-        mime = _MIME_MAP.get(suffix, "image/jpeg")
-        b64 = encode_image_base64(full_path)
+        mime = _detect_mime(full_path)
+        if mime in _SUPPORTED_MIME:
+            b64 = encode_image_base64(full_path)
+        else:
+            # Convert unsupported format (AVIF, HEIC, etc.) to JPEG
+            print(f"  Converting unsupported format ({mime}) → JPEG: {ref}")
+            try:
+                b64 = _convert_to_jpeg_b64(full_path)
+                mime = "image/jpeg"
+            except Exception as e:
+                print(f"  Skipping {ref} — conversion failed: {e}")
+                continue
         images.append({"mime": mime, "data": b64})
     return images, len(images) == 0
 
