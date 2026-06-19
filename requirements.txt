@@ -1,6 +1,9 @@
 openai
 anthropic
 pydantic
+pandas
+Pillow
+requests
 rank-bm25
 faiss-cpu
 sentence-transformers
