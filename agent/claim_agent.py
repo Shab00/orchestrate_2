@@ -1,12 +1,14 @@
 """Damage claim verification agent using Gemini Flash vision."""
 from __future__ import annotations
 
+import base64
 import json
 import os
 from pathlib import Path
 from typing import Any
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from agent.safety import run_safety_gates
 from agent.schemas import ClaimVerdict, safe_fallback_verdict
@@ -14,12 +16,8 @@ from data.loader import encode_image_base64, filter_evidence_for_object, resolve
 from prompts.system import CLAIM_SYSTEM_PROMPT
 
 
-def _get_model() -> genai.GenerativeModel:
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    return genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=CLAIM_SYSTEM_PROMPT,
-    )
+def _get_client() -> genai.Client:
+    return genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
 def _load_images(image_paths_str: str) -> tuple[list[dict[str, str]], bool]:
@@ -76,24 +74,35 @@ def _build_parts(
     )
     parts: list[Any] = [text]
     for img in images:
-        import base64
-        parts.append({"mime_type": img["mime"], "data": base64.b64decode(img["data"])})
+        parts.append(
+            types.Part.from_bytes(
+                data=base64.b64decode(img["data"]),
+                mime_type=img["mime"],
+            )
+        )
     return parts
 
 
-def _call_vision(model: genai.GenerativeModel, parts: list[Any]) -> str:
+def _call_vision(client: genai.Client, parts: list[Any]) -> str:
     """Make a single Gemini vision call and return the raw text response."""
-    response = model.generate_content(parts)
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=parts,
+        config=types.GenerateContentConfig(
+            system_instruction=CLAIM_SYSTEM_PROMPT,
+            max_output_tokens=1000,
+        ),
+    )
     return response.text or ""
 
 
-def _retry_call(model: genai.GenerativeModel, parts: list[Any], raw: str) -> str:
+def _retry_call(client: genai.Client, parts: list[Any], raw: str) -> str:
     """Retry with an explicit instruction to return only JSON."""
     retry_parts = parts + [
         "Your previous response was not valid JSON. Return ONLY valid JSON, no prose or fences.",
         raw,
     ]
-    return _call_vision(model, retry_parts)
+    return _call_vision(client, retry_parts)
 
 
 def _strip_json_fences(text: str) -> str:
@@ -129,14 +138,14 @@ def process_claim(
     if all_missing and row.get("image_paths", "").strip():
         return safe_fallback_verdict("All referenced images are missing.")
 
-    model = _get_model()
+    client = _get_client()
     parts = _build_parts(row, user_history, evidence_requirements, images)
 
-    raw = _call_vision(model, parts)
+    raw = _call_vision(client, parts)
     verdict = _parse_verdict(raw)
     if verdict is not None:
         return verdict
 
-    raw2 = _retry_call(model, parts, raw)
+    raw2 = _retry_call(client, parts, raw)
     verdict = _parse_verdict(raw2)
     return verdict if verdict is not None else safe_fallback_verdict("Failed to parse model response.")
