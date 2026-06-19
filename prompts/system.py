@@ -35,5 +35,16 @@ valid_image: boolean — true if the image set is usable for automated review; f
 severity: one of: none, low, medium, high, unknown.
 
 EXAMPLE OUTPUT FORMAT (values are illustrative only):
-{"evidence_standard_met": true, "evidence_standard_met_reason": "Clear frontal image of the damaged bumper.", "risk_flags": "none", "issue_type": "dent", "object_part": "front_bumper", "claim_status": "supported", "claim_status_justification": "img_1 shows a visible dent on the front bumper consistent with the claim.", "supporting_image_ids": "img_1", "valid_image": true, "severity": "medium"}
+{
+  "evidence_standard_met": true,
+  "evidence_standard_met_reason": "Clear frontal image of the damaged bumper.",
+  "risk_flags": "none",
+  "issue_type": "dent",
+  "object_part": "front_bumper",
+  "claim_status": "supported",
+  "claim_status_justification": "img_1 shows a visible dent on the front bumper consistent with the claim.",
+  "supporting_image_ids": "img_1",
+  "valid_image": true,
+  "severity": "medium"
+}
 """
