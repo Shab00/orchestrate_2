@@ -34,11 +34,12 @@ def claims(
     user_history_csv: Path = typer.Option(Path("claims/user_history.csv"), help="Path to user history CSV."),
     evidence_csv: Path = typer.Option(Path("claims/evidence_requirements.csv"), help="Path to evidence requirements CSV."),
     output_csv: Path = typer.Option(Path("output.csv"), help="Path to write output CSV."),
+    sleep: float = typer.Option(1.5, help="Seconds to sleep between API calls."),
 ) -> None:
     """Process all claims and write structured verdicts to output.csv."""
     load_dotenv()
     if not os.getenv("OPENAI_API_KEY"):
-        raise typer.BadParameter("OPENAI_API_KEY is required in .env")
+        raise typer.BadParameter("OPENAI_API_KEY is required. Set it with: export OPENAI_API_KEY=sk-...")
 
     claim_rows = load_claims(claims_csv)
     user_history = load_user_history(user_history_csv)
@@ -46,17 +47,18 @@ def claims(
     total = len(claim_rows)
     results = []
 
+    print(f"[bold]Processing {total} claims...[/bold]")
     for i, row in enumerate(claim_rows, start=1):
         uid = row.get("user_id", "")
-        print(f"Processing claim {i}/{total} — user_id: {uid}")
+        print(f"  [{i}/{total}] user_id: {uid}")
         history = user_history.get(uid, {})
         verdict = process_claim(row, history, evidence_requirements)
         results.append(verdict.to_csv_row(row))
         if i < total:
-            time.sleep(1)
+            time.sleep(sleep)
 
     pd.DataFrame(results, columns=OUTPUT_COLUMNS).to_csv(output_csv, index=False)
-    print(f"\n[green]Done.[/green] Results written to {output_csv}")
+    print(f"\n[green]Done.[/green] {total} claims written to {output_csv}")
 
 
 @app.command()
