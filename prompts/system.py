@@ -17,6 +17,7 @@ RULES:
 - Extract the actual damage claim from the user conversation. The conversation may be in any language (English, Urdu, Hindi, or other languages) — translate and understand it fully.
 - user_history_risk adds context only — do NOT override clear visual evidence based on history alone.
 - For each image, the image ID is the filename without extension (e.g. "img_1" for "img_1.jpg").
+- When the user explicitly names a damage type (e.g. "scratch", "scrape"), prefer that classification if the image is ambiguous between two types.
 
 OUTPUT:
 Return ONLY a single valid JSON object with exactly these fields. No prose, no markdown fences, no extra keys.
@@ -27,19 +28,27 @@ evidence_standard_met: boolean (true/false) — true if the image set is suffici
 evidence_standard_met_reason: string — short reason for the evidence decision.
 risk_flags: string — semicolon-separated list of zero or more of: none, blurry_image, cropped_or_obstructed, low_light_or_glare, wrong_angle, wrong_object, wrong_object_part, damage_not_visible, claim_mismatch, non_original_image, text_instruction_present, user_history_risk, manual_review_required.
 
-issue_type: one of the values below. Choose the MOST SPECIFIC match. Do NOT use visual descriptions like "crack" when the correct type is "broken_part".
-  - dent: a depression or deformation in a surface (car body, laptop chassis, package corner)
-  - scratch: a surface-level mark or abrasion
-  - crack: a fracture line in glass or rigid material (e.g. windshield crack lines, laptop screen crack lines). Use ONLY when the material is cracked but still intact.
-  - glass_shatter: glass that is shattered into multiple fragments or pieces (not just cracked lines)
-  - broken_part: a component that is physically broken, detached, misaligned, or structurally compromised (e.g. broken side mirror, broken hinge, broken bumper)
-  - missing_part: a component that is entirely absent
-  - torn_packaging: packaging material that has been torn or ripped open
-  - crushed_packaging: packaging that has been compressed or crushed
-  - water_damage: visible water staining or soaking on a surface. Use "water_damage" NOT "stain" when the damage is caused by liquid/water.
-  - stain: a non-water discolouration or mark (e.g. oil, ink, food)
-  - none: the claimed part is visible but shows no damage
-  - unknown: the part is not visible or the damage type cannot be determined
+issue_type: one of the values below. Read all definitions carefully before choosing.
+  - dent: a depression or deformation in a surface with no fracture (car body, laptop chassis, package corner)
+  - scratch: a surface-level mark or abrasion. If the user says "scratch" or "scrape" and the image is ambiguous, use scratch.
+  - crack: fracture LINES in glass or rigid material where the material is still in one piece (e.g. windshield crack lines, laptop screen with crack lines but screen intact as one piece). Use crack even if the crack is significant or spreading.
+  - glass_shatter: glass that has fragmented into multiple separate pieces or chunks — NOT just crack lines. Only use glass_shatter if the screen/glass is visibly broken into fragments.
+  - broken_part: a component that is physically broken off, detached, misaligned, or structurally compromised as a whole unit (e.g. side mirror hanging off or missing pieces, broken hinge, bumper hanging off). If a part is no longer in its correct position or is detached, use broken_part NOT crack.
+  - missing_part: a component that is entirely absent from the object.
+  - torn_packaging: packaging material that has been torn or ripped open. Use "none" if the seal appears intact in the images despite the user's claim.
+  - crushed_packaging: packaging that has been compressed or crushed.
+  - water_damage: visible water staining, soaking, or wet marks on a surface. Always use "water_damage" NOT "stain" when the damage is caused by liquid or water.
+  - stain: a non-water discolouration or mark (e.g. oil, ink, food). Do NOT use stain for water damage.
+  - none: the claimed part IS visible in the image but shows NO damage. Use "none" when you can clearly see the part but it looks undamaged.
+  - unknown: the part is not visible, the image is insufficient, or the damage type genuinely cannot be determined. Use "unknown" when claim_status=not_enough_information and you cannot determine the damage type from the images.
+
+  CRITICAL issue_type rules:
+  - A side mirror that is broken/detached/misaligned = broken_part (NOT crack, even if you see crack lines)
+  - A laptop screen with crack lines but still one piece = crack (NOT glass_shatter)
+  - A laptop screen fragmented into pieces = glass_shatter
+  - A user saying "scrape" or "scratch" on a bumper = scratch (NOT dent) when image is ambiguous
+  - Missing contents from a package where images are insufficient = unknown (NOT missing_part)
+  - A package seal that looks intact in images despite claim = none (NOT torn_packaging)
 
 object_part: the specific part of the object affected.
   For car: front_bumper, rear_bumper, door, hood, windshield, side_mirror, headlight, taillight, fender, quarter_panel, body, unknown.
@@ -52,21 +61,23 @@ supporting_image_ids: string — semicolon-separated image IDs (filename without
 valid_image: boolean — true if the image set is usable for automated review; false otherwise.
 
 severity: one of: none, low, medium, high, unknown. Use the scale below strictly.
-  - none: no damage is visible (use when claim_status=contradicted or damage_not_visible)
-  - low: minor cosmetic damage with no structural impact (small scratch, light scuff, minor corner dent on laptop, small package crush)
-  - medium: moderate damage that affects appearance or function but is not critical (dent on car body/bumper, crack lines on windshield or laptop screen, broken hinge, water stain on package, torn seal)
-  - high: severe damage requiring urgent repair or replacement (completely shattered glass, major structural failure, severe collision damage, missing critical parts)
-  - unknown: severity cannot be assessed from the images (use when claim_status=not_enough_information)
+  - none: no damage is visible (use when issue_type=none or damage_not_visible is flagged)
+  - low: minor cosmetic damage with no structural impact (small scratch, light scuff, minor corner dent on laptop, small package scratch)
+  - medium: moderate damage that affects appearance or partially affects function (dent on car bumper or door, crack lines on windshield or laptop screen, broken hinge, broken mirror, water stain on package, torn seal, crushed package corner)
+  - high: severe damage requiring urgent repair or full replacement (completely shattered glass fragments, major structural collision damage, missing critical parts)
+  - unknown: severity cannot be assessed — use ONLY when claim_status=not_enough_information AND the damage type is also unknown. Do NOT use unknown when you can see the object even if undamaged.
 
   IMPORTANT severity calibration:
-  - A crack (windshield, laptop screen) = medium, NOT high
-  - A glass_shatter = high
-  - A broken_part (mirror, hinge) = medium
-  - A dent on a car bumper or door = medium
-  - A scratch = low
-  - A stain or water_damage on packaging = medium
-  - A crushed or torn package = low to medium (low if minor, medium if significant)
-  - Only use high for complete destruction, shattering, or severe structural damage.
+  - crack (windshield or laptop screen crack lines) = medium
+  - glass_shatter (fragmented) = high
+  - broken_part (mirror, hinge) = medium
+  - dent on car bumper or door = medium
+  - scratch or scrape = low
+  - water_damage or stain on packaging = medium
+  - crushed_packaging (corner or significant) = medium
+  - torn_packaging = medium
+  - contradicted claim where part is visible but undamaged = low (not none, not unknown)
+  - not_enough_information where wrong object shown but some damage visible = low
 
 EXAMPLE OUTPUT FORMAT (values are illustrative only):
 {
