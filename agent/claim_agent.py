@@ -1,7 +1,6 @@
-"""Damage claim verification agent using OpenAI GPT-4o-mini vision."""
+"""Damage claim verification agent using OpenAI GPT-4o vision."""
 from __future__ import annotations
 
-import base64
 import json
 import os
 import time
@@ -15,7 +14,7 @@ from agent.schemas import ClaimVerdict, safe_fallback_verdict
 from data.loader import encode_image_base64, filter_evidence_for_object, resolve_image_path
 from prompts.system import CLAIM_SYSTEM_PROMPT
 
-MODEL = "gpt-4o-mini"
+MODEL = "gpt-4o"
 _RATE_LIMIT_RETRIES = 5
 _RATE_LIMIT_BACKOFF = [5, 10, 20, 40, 60]  # seconds between retries
 
@@ -82,14 +81,14 @@ def _build_user_content(
             "type": "image_url",
             "image_url": {
                 "url": f"data:{img['mime']};base64,{img['data']}",
-                "detail": "low",
+                "detail": "high",
             },
         })
     return content
 
 
 def _call_vision(client: OpenAI, user_content: list[Any]) -> str:
-    """Make a single GPT-4o-mini vision call with automatic rate-limit retry."""
+    """Make a single GPT-4o vision call with automatic rate-limit retry."""
     for attempt, wait in enumerate(_RATE_LIMIT_BACKOFF, start=1):
         try:
             response = client.chat.completions.create(

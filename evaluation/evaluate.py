@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ SAMPLE_CLAIMS_PATH = Path("claims/sample_claims.csv")
 USER_HISTORY_PATH = Path("claims/user_history.csv")
 EVIDENCE_REQUIREMENTS_PATH = Path("claims/evidence_requirements.csv")
 OUTPUT_PATH = Path("evaluation/sample_predictions.csv")
+REPORT_PATH = Path("evaluation/evaluation_report.md")
 
 EVAL_FIELDS = [
     "evidence_standard_met",
@@ -67,6 +69,55 @@ def _print_accuracy_table(field_matches: dict[str, list[bool]]) -> None:
     print()
 
 
+def _write_report(
+    field_matches: dict[str, list[bool]],
+    rows: list[dict[str, Any]],
+    samples: list[dict[str, Any]],
+    elapsed: float,
+) -> None:
+    """Write a markdown evaluation report."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total = len(samples)
+    overall_correct = sum(all(_compare_fields(r, s).values()) for r, s in zip(rows, samples))
+    overall_acc = overall_correct / total if total > 0 else 0.0
+
+    lines = [
+        "# Evaluation Report",
+        f"",
+        f"**Run timestamp:** {timestamp}  ",
+        f"**Total samples:** {total}  ",
+        f"**Elapsed time:** {elapsed:.1f}s  ",
+        f"**Overall accuracy (all fields correct):** {overall_acc:.1%}  ",
+        "",
+        "## Per-Field Accuracy",
+        "",
+        "| Field | Correct | Total | Accuracy |",
+        "|-------|---------|-------|----------|",
+    ]
+    for field, matches in field_matches.items():
+        correct = sum(matches)
+        acc = correct / len(matches) if matches else 0.0
+        lines.append(f"| {field} | {correct} | {len(matches)} | {acc:.1%} |")
+
+    lines += [
+        "",
+        "## Failed Cases",
+        "",
+        "| user_id | Field | Predicted | Expected |",
+        "|---------|-------|-----------|----------|",
+    ]
+    for row, sample, matches in zip(rows, samples, [_compare_fields(r, s) for r, s in zip(rows, samples)]):
+        for field, correct in matches.items():
+            if not correct:
+                pred = _normalise(row.get(field, ""))
+                exp = _normalise(sample.get(field, ""))
+                uid = sample.get("user_id", "")
+                lines.append(f"| {uid} | {field} | {pred} | {exp} |")
+
+    REPORT_PATH.write_text("\n".join(lines))
+    print(f"Evaluation report saved to {REPORT_PATH}")
+
+
 def run_evaluation() -> None:
     """Run agent on sample claims and print per-field accuracy."""
     samples = _load_sample_claims()
@@ -75,6 +126,7 @@ def run_evaluation() -> None:
 
     field_matches: dict[str, list[bool]] = {f: [] for f in EVAL_FIELDS}
     rows: list[dict[str, Any]] = []
+    start = time.time()
 
     for i, row in enumerate(samples, start=1):
         print(f"Evaluating sample {i}/{len(samples)} — user_id: {row.get('user_id', '')}")
@@ -87,11 +139,13 @@ def run_evaluation() -> None:
         for field, match in comparisons.items():
             field_matches[field].append(match)
 
-        time.sleep(1)
+        time.sleep(2)
 
+    elapsed = time.time() - start
     pd.DataFrame(rows, columns=OUTPUT_COLUMNS).to_csv(OUTPUT_PATH, index=False)
     print(f"\nPredictions saved to {OUTPUT_PATH}")
     _print_accuracy_table(field_matches)
+    _write_report(field_matches, rows, samples, elapsed)
 
 
 if __name__ == "__main__":
