@@ -1,4 +1,4 @@
-"""Damage claim verification agent using GPT-4o vision."""
+"""Damage claim verification agent using Gemini Flash vision."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
+import google.generativeai as genai
 
 from agent.safety import run_safety_gates
 from agent.schemas import ClaimVerdict, safe_fallback_verdict
@@ -14,8 +14,12 @@ from data.loader import encode_image_base64, filter_evidence_for_object, resolve
 from prompts.system import CLAIM_SYSTEM_PROMPT
 
 
-def _get_client() -> OpenAI:
-    return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+def _get_model() -> genai.GenerativeModel:
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    return genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        system_instruction=CLAIM_SYSTEM_PROMPT,
+    )
 
 
 def _load_images(image_paths_str: str) -> tuple[list[dict[str, str]], bool]:
@@ -55,51 +59,41 @@ def _format_user_history(history: dict[str, Any]) -> str:
     )
 
 
-def _build_user_content(
+def _build_parts(
     row: dict[str, Any],
     user_history: dict[str, Any],
     evidence_requirements: list[dict[str, Any]],
     images: list[dict[str, str]],
-) -> list[dict[str, Any]]:
-    """Build the user message content list for the vision API call."""
+) -> list[Any]:
+    """Build Gemini content parts: text block + image blobs."""
     object_requirements = filter_evidence_for_object(evidence_requirements, row.get("claim_object", ""))
-    text_block = {
-        "type": "text",
-        "text": (
-            f"Claim object: {row.get('claim_object', '')}\n"
-            f"User claim: {row.get('user_claim', '')}\n"
-            f"User history: {_format_user_history(user_history)}\n"
-            f"Evidence requirements:\n{_format_evidence_requirements(object_requirements)}\n"
-            "Analyse the images and return the JSON verdict."
-        ),
-    }
-    image_blocks = [
-        {"type": "image_url", "image_url": {"url": f"data:{img['mime']};base64,{img['data']}"}}
-        for img in images
-    ]
-    return [text_block, *image_blocks]
-
-
-def _call_vision(client: OpenAI, user_content: list[dict[str, Any]]) -> str:
-    """Make a single GPT-4o vision call and return the raw text response."""
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        max_tokens=1000,
-        messages=[
-            {"role": "system", "content": CLAIM_SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
+    text = (
+        f"Claim object: {row.get('claim_object', '')}\n"
+        f"User claim: {row.get('user_claim', '')}\n"
+        f"User history: {_format_user_history(user_history)}\n"
+        f"Evidence requirements:\n{_format_evidence_requirements(object_requirements)}\n"
+        "Analyse the images and return the JSON verdict."
     )
-    return response.choices[0].message.content or ""
+    parts: list[Any] = [text]
+    for img in images:
+        import base64
+        parts.append({"mime_type": img["mime"], "data": base64.b64decode(img["data"])})
+    return parts
 
 
-def _retry_call(client: OpenAI, user_content: list[dict[str, Any]], raw: str) -> str:
-    """Retry the call with an explicit instruction to return only JSON."""
-    retry_content = [
-        {"type": "text", "text": "Your previous response was not valid JSON. Return ONLY valid JSON, no prose or fences."},
-        {"type": "text", "text": raw},
+def _call_vision(model: genai.GenerativeModel, parts: list[Any]) -> str:
+    """Make a single Gemini vision call and return the raw text response."""
+    response = model.generate_content(parts)
+    return response.text or ""
+
+
+def _retry_call(model: genai.GenerativeModel, parts: list[Any], raw: str) -> str:
+    """Retry with an explicit instruction to return only JSON."""
+    retry_parts = parts + [
+        "Your previous response was not valid JSON. Return ONLY valid JSON, no prose or fences.",
+        raw,
     ]
-    return _call_vision(client, user_content + retry_content)
+    return _call_vision(model, retry_parts)
 
 
 def _strip_json_fences(text: str) -> str:
@@ -135,14 +129,14 @@ def process_claim(
     if all_missing and row.get("image_paths", "").strip():
         return safe_fallback_verdict("All referenced images are missing.")
 
-    client = _get_client()
-    user_content = _build_user_content(row, user_history, evidence_requirements, images)
+    model = _get_model()
+    parts = _build_parts(row, user_history, evidence_requirements, images)
 
-    raw = _call_vision(client, user_content)
+    raw = _call_vision(model, parts)
     verdict = _parse_verdict(raw)
     if verdict is not None:
         return verdict
 
-    raw2 = _retry_call(client, user_content, raw)
+    raw2 = _retry_call(model, parts, raw)
     verdict = _parse_verdict(raw2)
     return verdict if verdict is not None else safe_fallback_verdict("Failed to parse model response.")
