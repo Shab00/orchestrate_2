@@ -1,4 +1,4 @@
-"""Damage claim verification agent using Gemini Flash vision."""
+"""Damage claim verification agent using OpenAI GPT-4o vision."""
 from __future__ import annotations
 
 import base64
@@ -7,8 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 from agent.safety import run_safety_gates
 from agent.schemas import ClaimVerdict, safe_fallback_verdict
@@ -16,8 +15,8 @@ from data.loader import encode_image_base64, filter_evidence_for_object, resolve
 from prompts.system import CLAIM_SYSTEM_PROMPT
 
 
-def _get_client() -> genai.Client:
-    return genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+def _get_client() -> OpenAI:
+    return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
 def _load_images(image_paths_str: str) -> tuple[list[dict[str, str]], bool]:
@@ -57,13 +56,13 @@ def _format_user_history(history: dict[str, Any]) -> str:
     )
 
 
-def _build_parts(
+def _build_user_content(
     row: dict[str, Any],
     user_history: dict[str, Any],
     evidence_requirements: list[dict[str, Any]],
     images: list[dict[str, str]],
 ) -> list[Any]:
-    """Build Gemini content parts: text block + image blobs."""
+    """Build OpenAI message content: text block + base64 images."""
     object_requirements = filter_evidence_for_object(evidence_requirements, row.get("claim_object", ""))
     text = (
         f"Claim object: {row.get('claim_object', '')}\n"
@@ -72,37 +71,40 @@ def _build_parts(
         f"Evidence requirements:\n{_format_evidence_requirements(object_requirements)}\n"
         "Analyse the images and return the JSON verdict."
     )
-    parts: list[Any] = [text]
+    content: list[Any] = [{"type": "text", "text": text}]
     for img in images:
-        parts.append(
-            types.Part.from_bytes(
-                data=base64.b64decode(img["data"]),
-                mime_type=img["mime"],
-            )
-        )
-    return parts
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{img['mime']};base64,{img['data']}",
+                "detail": "high",
+            },
+        })
+    return content
 
 
-def _call_vision(client: genai.Client, parts: list[Any]) -> str:
-    """Make a single Gemini vision call and return the raw text response."""
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=parts,
-        config=types.GenerateContentConfig(
-            system_instruction=CLAIM_SYSTEM_PROMPT,
-            max_output_tokens=1000,
-        ),
+def _call_vision(client: OpenAI, user_content: list[Any]) -> str:
+    """Make a single GPT-4o vision call and return the raw text response."""
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": CLAIM_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        max_tokens=1000,
     )
-    return response.text or ""
+    return response.choices[0].message.content or ""
 
 
-def _retry_call(client: genai.Client, parts: list[Any], raw: str) -> str:
+def _retry_call(client: OpenAI, user_content: list[Any], raw: str) -> str:
     """Retry with an explicit instruction to return only JSON."""
-    retry_parts = parts + [
-        "Your previous response was not valid JSON. Return ONLY valid JSON, no prose or fences.",
-        raw,
+    retry_content = user_content + [
+        {
+            "type": "text",
+            "text": "Your previous response was not valid JSON. Return ONLY valid JSON, no prose or fences.",
+        }
     ]
-    return _call_vision(client, retry_parts)
+    return _call_vision(client, retry_content)
 
 
 def _strip_json_fences(text: str) -> str:
@@ -139,13 +141,13 @@ def process_claim(
         return safe_fallback_verdict("All referenced images are missing.")
 
     client = _get_client()
-    parts = _build_parts(row, user_history, evidence_requirements, images)
+    user_content = _build_user_content(row, user_history, evidence_requirements, images)
 
-    raw = _call_vision(client, parts)
+    raw = _call_vision(client, user_content)
     verdict = _parse_verdict(raw)
     if verdict is not None:
         return verdict
 
-    raw2 = _retry_call(client, parts, raw)
+    raw2 = _retry_call(client, user_content, raw)
     verdict = _parse_verdict(raw2)
     return verdict if verdict is not None else safe_fallback_verdict("Failed to parse model response.")
